@@ -47,5 +47,5 @@ python advanced_scanner.py
 ## 👤 Geliştirici / Developer
 
 * **Mücahid Balcı** - *Genç Girişimci & Siber Güvenlik Araştırmacısı*
-* **GitHub:** [@mucahhtd](https://github.com)
+* **GitHub:** [@mucahhid](https://github.com)
 * **Web Sitesi:** [mucahidinc.freedev.app](https://freedev.app)
