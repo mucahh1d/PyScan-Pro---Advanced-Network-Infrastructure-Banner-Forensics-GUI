@@ -14,12 +14,15 @@ ctk.set_default_color_theme("blue")
 
 
 class ScannerEngine:
-    def __init__(self, target, ports, result_queue, log_queue):
+    def __init__(self, target, ports, result_queue, log_queue, timeout=3.0):
         self.target = target
         self.ports = ports
         self.result_queue = result_queue
         self.log_queue = log_queue
+        self.timeout = timeout
         self.is_running = True
+        self.completed = 0
+        self.lock = threading.Lock()
 
     def stop(self):
         self.is_running = False
@@ -33,27 +36,34 @@ class ScannerEngine:
 
     def grab_banner(self, sock, port):
         try:
-            sock.settimeout(1.5)
-            if port in [80, 443, 8080, 8443, 8000]:
-                sock.send(b"GET / HTTP/1.0\r\nHost: target\r\n\r\n")
+            sock.settimeout(2.0)
+            if port in [80, 443, 8080, 8443, 8000, 8888, 3000, 5000]:
+                request = f"GET / HTTP/1.0\r\nHost: {self.target}\r\nUser-Agent: PyScan/1.0\r\nConnection: close\r\n\r\n"
+                sock.send(request.encode())
             else:
                 sock.send(b"\r\n")
 
-            response = sock.recv(2048).decode('utf-8', errors='ignore').strip()
+            response = sock.recv(4096).decode('utf-8', errors='ignore').strip()
             if response:
-                return response.split('\n')[0].split('\r')[0][:60]
-        except (socket.timeout, ConnectionResetError, OSError):
+                lines = response.split('\n')
+                for line in lines:
+                    if 'Server:' in line or 'SSH-' in line or '220 ' in line or 'FTP' in line or 'HTTP/' in line:
+                        return line.strip()[:100]
+                return lines[0].split('\r')[0][:100]
+        except:
             pass
-        return "Hidden / Filtered"
+        return "Filtered / No Response"
 
-    def scan_port(self, ip, port):
+    def scan_single_port(self, ip, port):
         if not self.is_running:
             return
 
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1.0)
-                if s.connect_ex((ip, port)) == 0:
+                s.settimeout(self.timeout)
+                result = s.connect_ex((ip, port))
+
+                if result == 0:
                     try:
                         service = socket.getservbyport(port, 'tcp')
                     except OSError:
@@ -67,34 +77,46 @@ class ScannerEngine:
                         'service': service,
                         'banner': banner
                     })
-        except Exception:
-            pass
+                    self.log_queue.put(f"[OPEN] {ip}:{port} - {service} - {banner}")
+                else:
+                    self.log_queue.put(f"[CLOSED] {ip}:{port}")
+        except socket.timeout:
+            self.log_queue.put(f"[TIMEOUT] {ip}:{port}")
+        except Exception as e:
+            self.log_queue.put(f"[ERROR] {ip}:{port} - {str(e)}")
+        finally:
+            with self.lock:
+                self.completed += 1
+                if self.completed % 5 == 0 or self.completed == len(self.ports):
+                    self.log_queue.put(f"[PROGRESS] {self.completed}/{len(self.ports)} ports scanned")
 
     def execute(self):
         ips = self.expand_target()
-        total_tasks = len(ips) * len(self.ports)
-        completed = 0
+        total_ports = len(self.ports)
 
-        self.log_queue.put(f"[INIT] Target resolved: {len(ips)} IP(s), {len(self.ports)} Port(s)")
-        self.log_queue.put(f"[INIT] Total tasks: {total_tasks}")
+        self.log_queue.put(f"[INIT] Target: {self.target}")
+        self.log_queue.put(f"[INIT] IPs: {len(ips)}, Ports: {total_ports}")
+        self.log_queue.put(f"[INIT] Timeout: {self.timeout}s")
+        self.log_queue.put("[SCAN] Starting parallel scan...")
 
-        with threading.ThreadPoolExecutor(max_workers=150) as executor:
-            futures = []
-            for ip in ips:
-                for port in self.ports:
-                    if not self.is_running:
-                        break
-                    futures.append(executor.submit(self.scan_port, ip, port))
-
-            for future in futures:
+        threads = []
+        for ip in ips:
+            for port in self.ports:
                 if not self.is_running:
                     break
-                future.result()
-                completed += 1
-                if completed % 50 == 0:
-                    self.log_queue.put(f"[PROGRESS] {completed}/{total_tasks} tasks completed")
+                t = threading.Thread(target=self.scan_single_port, args=(ip, port), daemon=True)
+                threads.append(t)
+                t.start()
 
-        self.log_queue.put("[DONE] Scan operation finished.")
+                # Thread sayısını sınırla (maksimum 50 eş zamanlı)
+                if len([th for th in threads if th.is_alive()]) >= 50:
+                    time.sleep(0.1)
+
+        for t in threads:
+            t.join(timeout=self.timeout + 2)
+
+        self.log_queue.put(
+            f"[DONE] Completed. {len([r for r in self.result_queue.queue if isinstance(r, dict)])} open ports found.")
         self.result_queue.put("SCAN_COMPLETE")
 
 
@@ -144,7 +166,7 @@ class ScannerApp(ctk.CTk):
     def build_controls(self):
         control_frame = ctk.CTkFrame(self)
         control_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 10))
-        control_frame.grid_rowconfigure(2, weight=1)
+        control_frame.grid_rowconfigure(3, weight=1)
         control_frame.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(control_frame, text="Target (IP / CIDR)", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0,
@@ -171,8 +193,15 @@ class ScannerApp(ctk.CTk):
         self.custom_port_entry = ctk.CTkEntry(profile_frame, placeholder_text="Custom: 80,443,8080 or 1-100", width=200)
         self.custom_port_entry.pack(side="left", padx=10)
 
+        ctk.CTkLabel(control_frame, text="Timeout (sec)", font=ctk.CTkFont(weight="bold")).grid(row=2, column=0,
+                                                                                                sticky="w", padx=15,
+                                                                                                pady=5)
+        self.timeout_entry = ctk.CTkEntry(control_frame, placeholder_text="3.0", width=100)
+        self.timeout_entry.insert(0, "3.0")
+        self.timeout_entry.grid(row=2, column=1, sticky="w", padx=15, pady=5)
+
         action_frame = ctk.CTkFrame(control_frame, fg_color="transparent")
-        action_frame.grid(row=0, column=2, rowspan=2, padx=15, pady=10, sticky="e")
+        action_frame.grid(row=0, column=2, rowspan=3, padx=15, pady=10, sticky="e")
 
         self.start_btn = ctk.CTkButton(action_frame, text="START SCAN", command=self.start_scan, fg_color="#2ea043",
                                        hover_color="#238636")
@@ -188,7 +217,7 @@ class ScannerApp(ctk.CTk):
 
         self.log_text = tk.Text(control_frame, height=8, bg="#0d1117", fg="#8b949e", font=("Consolas", 10),
                                 relief="flat", state="disabled")
-        self.log_text.grid(row=2, column=0, columnspan=3, sticky="nsew", padx=15, pady=10)
+        self.log_text.grid(row=3, column=0, columnspan=3, sticky="nsew", padx=15, pady=10)
 
     def build_output_area(self):
         output_frame = ctk.CTkFrame(self)
@@ -265,6 +294,13 @@ class ScannerApp(ctk.CTk):
             messagebox.showwarning("Input Error", "Invalid port configuration.")
             return
 
+        try:
+            timeout = float(self.timeout_entry.get().strip())
+            if timeout < 0.5 or timeout > 10.0:
+                raise ValueError
+        except ValueError:
+            timeout = 3.0
+
         self.scan_results = []
         self.tree.delete(*self.tree.get_children())
         self.log_text.configure(state="normal")
@@ -276,7 +312,7 @@ class ScannerApp(ctk.CTk):
         self.export_btn.configure(state="disabled")
         self.status_var.set("Scanning in progress...")
 
-        self.scanner_engine = ScannerEngine(target, ports, self.result_queue, self.log_queue)
+        self.scanner_engine = ScannerEngine(target, ports, self.result_queue, self.log_queue, timeout)
         self.scan_thread = threading.Thread(target=self.scanner_engine.execute, daemon=True)
         self.scan_thread.start()
 
