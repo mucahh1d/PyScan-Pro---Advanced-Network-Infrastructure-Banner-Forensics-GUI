@@ -157,7 +157,7 @@ class ScannerApp(ctk.CTk):
 
         branding_label = ctk.CTkLabel(
             header_frame,
-            text="Powered by mucahidbalci  |  mucahidinc.freedev.app",
+            text="Powered by mucahidbalci  |  mucahidbalci.github.io",
             font=ctk.CTkFont(size=12, weight="normal"),
             text_color="gray"
         )
