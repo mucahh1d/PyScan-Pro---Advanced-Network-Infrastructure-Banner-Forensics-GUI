@@ -1,4 +1,3 @@
-<img width="1095" height="829" alt="pywebclone" src="https://github.com/user-attachments/assets/9ffd50a3-1fb8-4bc6-81ff-ea6ab82ea301" />
 # PyScan Pro - Advanced Network Infrastructure & Banner Forensics GUI
 
 PyScan Pro; sızma testleri, yerel ağ denetimleri ve siber güvenlik analizleri için geliştirilmiş, **`customtkinter` altyapılı, modern ve yüksek performanslı bir ağ zafiyet tarama (Port Scanner) yazılımıdır.**
@@ -37,7 +36,6 @@ Aşağıdaki 20 saniyelik demo videoda PyScanPro'nun 150 thread multithreading m
 > - Bulunan açık portlar ve servis versiyonları anlık listeleniyor
 > - Tüm sonuçlar CSV olarak kaydedilmeye hazır
 
-![PyScanPro GUI](https://github.com/user-attachments/assets/e1e33d43-c4ae-450a-9680-77beca091436)
 
 ## 🛠️ Sistem Gereksinimleri & Kurulum
 
